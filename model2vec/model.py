@@ -3,6 +3,7 @@ from __future__ import annotations
 from logging import getLogger
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import time
 from typing import Any, Iterator
 
 import numpy as np
@@ -176,6 +177,8 @@ class StaticModel(nn.Module):
         cls: type[StaticModel],
         path: PathLike,
         token: str | None = None,
+        local_files_only: bool = False,
+        load_readme: bool = True,
     ) -> StaticModel:
         """
         Load a StaticModel from a local path or huggingface hub path.
@@ -184,9 +187,13 @@ class StaticModel(nn.Module):
 
         :param path: The path to load your static model from.
         :param token: The huggingface token to use.
+        :param local_files_only: Whether to only load local files.
+        :param load_readme: Whether to load the readme.
         :return: A StaticEmbedder
         """
-        embeddings, tokenizer, config, metadata = load_pretrained(path, token=token)
+        embeddings, tokenizer, config, metadata = load_pretrained(
+            path, token=token, local_files_only=local_files_only, load_readme=load_readme
+        )
 
         return cls(
             embeddings, tokenizer, config, base_model_name=metadata.get("base_model"), language=metadata.get("language")
