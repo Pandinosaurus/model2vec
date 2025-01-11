@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import json
+import re
 from importlib import import_module
 from unittest.mock import MagicMock, patch
 
@@ -90,10 +93,69 @@ def test_distill_from_model(
             use_subword=use_subword,
         )
 
-        assert static_model.embedding.weight.shape == static_model2.embedding.weight.shape
+        assert static_model.embedding.shape == static_model2.embedding.shape
         assert static_model.config == static_model2.config
         assert json.loads(static_model.tokenizer.to_str()) == json.loads(static_model2.tokenizer.to_str())
         assert static_model.base_model_name == static_model2.base_model_name
+
+
+@patch.object(import_module("model2vec.distill.distillation"), "model_info")
+@patch("transformers.AutoModel.from_pretrained")
+def test_distill_removal_pattern(
+    mock_auto_model: MagicMock,
+    mock_model_info: MagicMock,
+    mock_berttokenizer: BertTokenizerFast,
+    mock_transformer: AutoModel,
+) -> None:
+    """Test the removal pattern."""
+    # Mock the return value of model_info to avoid calling the Hugging Face API
+    mock_model_info.return_value = type("ModelInfo", (object,), {"cardData": {"language": "en"}})
+
+    # Patch the tokenizers and models to return the real BertTokenizerFast and mock model instances
+    # mock_auto_tokenizer.return_value = mock_berttokenizer
+    mock_auto_model.return_value = mock_transformer
+
+    vocab_size = mock_berttokenizer.vocab_size
+
+    static_model = distill_from_model(
+        model=mock_transformer,
+        tokenizer=mock_berttokenizer,
+        vocabulary=None,
+        device="cpu",
+        token_remove_pattern=None,
+    )
+
+    assert len(static_model.embedding) == vocab_size
+
+    # No tokens removed, nonsensical pattern
+    static_model = distill_from_model(
+        model=mock_transformer,
+        tokenizer=mock_berttokenizer,
+        vocabulary=None,
+        device="cpu",
+        token_remove_pattern="£££££££££££££££££",
+    )
+
+    assert len(static_model.embedding) == vocab_size
+
+    with pytest.raises(ValueError):
+        static_model = distill_from_model(
+            model=mock_transformer,
+            tokenizer=mock_berttokenizer,
+            vocabulary=None,
+            device="cpu",
+            token_remove_pattern="[...papapa",
+        )
+
+    # Remove all tokens
+    with pytest.raises(ValueError):
+        static_model = distill_from_model(
+            model=mock_transformer,
+            tokenizer=mock_berttokenizer,
+            vocabulary=None,
+            device="cpu",
+            token_remove_pattern=".*",
+        )
 
 
 @pytest.mark.parametrize(
@@ -159,7 +221,7 @@ def test_distill(
 
         # Assert the model is correctly generated
         assert isinstance(static_model, StaticModel)
-        assert static_model.embedding.weight.shape == expected_shape
+        assert static_model.embedding.shape == expected_shape
         assert "mock-model" in static_model.config["tokenizer_name"]
         assert static_model.tokenizer is not None
 
