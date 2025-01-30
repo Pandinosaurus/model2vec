@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
+from __future__ import annotations
+
 import inspect
 import logging
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, Union
 
 import numpy as np
 import torch
@@ -13,7 +15,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPoolingAndCrossAtte
 logger = logging.getLogger(__name__)
 
 
-PathLike = str | Path
+PathLike = Union[Path, str]
 
 _DEFAULT_BATCH_SIZE = 1024
 
@@ -22,18 +24,19 @@ class ModulewithWeights(Protocol):
     weight: torch.nn.Parameter
 
 
-def create_output_embeddings_from_model_name_and_tokens(
+def create_output_embeddings_from_model_and_tokens(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,
     tokens: list[str],
     device: str,
 ) -> tuple[list[str], np.ndarray]:
     """
-    Create output embeddings for a bunch of tokens from a model name.
+    Create output embeddings for a bunch of tokens using a pretrained model.
 
-    It does a forward pass for all tokens passed in tokens.
+    It does a forward pass for all tokens passed in `tokens`.
 
-    :param model: The model name to use.
+    :param model: The model to use.
+        This should be a transformers model.
     :param tokenizer: The tokenizer to use.
     :param tokens: The tokens to use.
     :param device: The torch device to use.
@@ -97,23 +100,32 @@ def _encode_mean_using_model(model: PreTrainedModel, tokenizer: PreTrainedTokeni
     return result / divisor[:, None]
 
 
-def create_output_embeddings_from_model_name(
+def create_output_embeddings_from_model(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,
     device: str,
 ) -> tuple[list[str], np.ndarray]:
     """
-    Create output embeddings for a bunch of tokens from a model name.
+    Create output embeddings for a bunch of tokens using a pretrained model.
 
-    It does a forward pass for all ids in the tokenizer.
+    It does a forward pass for all tokens passed in the tokenizer vocabulary.
 
-    :param model: The model name to use.
+    :param model: The model to use.
+        This should be a transformers model.
     :param tokenizer: The tokenizer to use.
     :param device: The torch device to use.
     :return: The tokens and output embeddings.
     """
     model = model.to(device)
-    ids = torch.arange(tokenizer.vocab_size)
+
+    # Quick check to see if the tokenizer is consistent.
+    vocab_length = len(tokenizer.get_vocab())
+    if vocab_length != tokenizer.vocab_size:
+        logger.warning(
+            f"Reported vocab size {tokenizer.vocab_size} is inconsistent with the vocab size {vocab_length}."
+        )
+
+    ids = torch.arange(vocab_length)
 
     # Work-around to get the eos and bos token ids without having to go into tokenizer internals.
     dummy_encoding = tokenizer.encode("A")
@@ -122,7 +134,8 @@ def create_output_embeddings_from_model_name(
     bos = torch.full([len(ids)], fill_value=bos_token_id)
     eos = torch.full([len(ids)], fill_value=eos_token_id)
 
-    stacked = torch.stack([bos, ids, eos], dim=1)
+    # NOTE: reversing the bos and eos tokens works better on our benchmarks.
+    stacked = torch.stack([eos, ids, bos], dim=1)
 
     intermediate_weights: list[np.ndarray] = []
     for batch_idx in tqdm(range(0, len(stacked), _DEFAULT_BATCH_SIZE)):
@@ -146,7 +159,7 @@ def create_output_embeddings_from_model_name(
                 out = out.float()
 
         # Add the output to the intermediate weights
-        intermediate_weights.append(out[:, 1].detach().cpu().numpy())
+        intermediate_weights.append(out.mean(1).detach().cpu().numpy())
 
     # Concatenate the intermediate weights
     out_weights = np.concatenate(intermediate_weights)
